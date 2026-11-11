@@ -73,5 +73,31 @@ Upstox 1-minute history starts in January 2022. Candles are cached in `data/cand
 | `chargesPerTrade` | 50 | ₹ per round trip |
 | `lots`, `lotSize` | 1; SENSEX 20, NIFTY 65 | Quantity = lots × lot size |
 
+## Improving it honestly: `npm run optimize`
+
+```bash
+npm run optimize -- --token-file data/analytics-token.txt
+```
+
+Tries **288 combinations** of these improvements:
+
+| Option | Values |
+|---|---|
+| Sides | PE only · PE + CE |
+| Entry window | all day · 09:30–11:30 · 09:30–14:00 |
+| Max ₹ risk per trade | none · ₹1,000 · ₹650 (bigger alert candles are skipped) |
+| Trend filter | off · PE only below / CE only above the 15-min 50 EMA |
+| Target | 1:3 · 1:2 |
+| Breakeven | off · stop to entry after +1R |
+| Max trades per day | none · 2 |
+
+How it avoids fooling you:
+1. Every combination runs on **2025 only** (`--train`).
+2. Ranked by the **worse** of Sensex and Nifty: a real edge must work on both.
+3. The top 10 are then run on **2026** (`--test`), data that played no part in choosing them.
+4. It prints whether the winners held up on 2026. If they didn't, the "improvement" was luck.
+
+Slippage of ₹1 per option unit (round trip) is now included everywhere (`slippagePerUnit` in `config.json`).
+
 ## Next (after a good backtest)
 Live Telegram alerts when a signal triggers. You still place the trade yourself.

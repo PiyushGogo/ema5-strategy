@@ -3,10 +3,17 @@
   "sellTimeframeMin": 5,
   "buyTimeframeMin": 15,
   "rewardRisk": 3,
-  "entryWindow": { "start": "09:15", "end": "15:00" },
+  "entryWindow": {
+    "start": "09:15",
+    "end": "15:00"
+  },
   "exitTime": "15:15",
   "optionDelta": 0.5,
   "chargesPerTrade": 50,
+  "slippagePerUnit": 1,
   "lots": 1,
-  "lotSize": { "SENSEX": 20, "NIFTY": 65 }
+  "lotSize": {
+    "SENSEX": 20,
+    "NIFTY": 65
+  }
 }

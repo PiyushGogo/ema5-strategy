@@ -24,6 +24,17 @@ export interface BtConfig {
   quantity: number;
   /** Which sides to trade. */
   sides: OptionSide[];
+  /** ₹ slippage per option unit, round trip (e.g. 1 = ₹0.50 worse on entry and on exit). */
+  slippagePerUnit?: number;
+  // ---- optional improvements (all off by default = the classic strategy)
+  /** Skip signals whose estimated ₹ risk at the stop is above this. */
+  maxRiskRupees?: number;
+  /** Trend filter: PE only below, CE only above, the EMA(period) of the last completed `minutes` candle. */
+  trendFilter?: { minutes: number; period: number };
+  /** Move the stop to entry once price has moved this many R in your favour. */
+  breakevenAtR?: number;
+  /** Max entries per day. */
+  maxTradesPerDay?: number;
 }
 
 export interface Trade {
@@ -37,7 +48,7 @@ export interface Trade {
   riskPts: number;
   exitTime: number;
   exit: number;
-  reason: "TARGET" | "SL" | "TIME";
+  reason: "TARGET" | "SL" | "BE" | "TIME";
   /** index points in your favour (negative = loss) */
   pts: number;
   /** estimated option P&L in ₹ incl. charges */
@@ -57,21 +68,36 @@ interface TfBar {
   readyAt: number;
 }
 
+const tfCache = new WeakMap<Candle[], Map<string, TfBar[]>>();
+
+/** Signal-chart candles + EMA, memoised per input array (the optimiser runs hundreds of configs). */
 function timeframe(oneMin: Candle[], minutes: number, period: number): TfBar[] {
+  let byKey = tfCache.get(oneMin);
+  if (!byKey) tfCache.set(oneMin, (byKey = new Map()));
+  const key = `${minutes}/${period}`;
+  const hit = byKey.get(key);
+  if (hit) return hit;
   const bars = aggregate(oneMin, minutes);
   const e = ema(bars.map((b) => b.c), period);
-  return bars.map((c, i) => ({ c, ema: e[i], readyAt: c.ts + minutes * 60_000 }));
+  const out = bars.map((c, i) => ({ c, ema: e[i], readyAt: c.ts + minutes * 60_000 }));
+  byKey.set(key, out);
+  return out;
 }
 
 export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
-  const m1 = [...oneMin].sort((a, b) => a.ts - b.ts);
+  const sorted = oneMin.every((c, i) => i === 0 || oneMin[i - 1].ts <= c.ts);
+  const m1 = sorted ? oneMin : [...oneMin].sort((a, b) => a.ts - b.ts);
+  const unitCost = cfg.optionDelta * cfg.quantity;
+  const slip = (cfg.slippagePerUnit ?? 0) * cfg.quantity;
+  const trend = cfg.trendFilter ? { bars: timeframe(m1, cfg.trendFilter.minutes, cfg.trendFilter.period), p: 0, last: undefined as TfBar | undefined } : undefined;
+  let tradesToday = 0;
   const tfs: { side: OptionSide; bars: TfBar[]; p: number }[] = [];
   if (cfg.sides.includes("PE")) tfs.push({ side: "PE", bars: timeframe(m1, cfg.sellTimeframeMin, cfg.emaPeriod), p: 0 });
   if (cfg.sides.includes("CE")) tfs.push({ side: "CE", bars: timeframe(m1, cfg.buyTimeframeMin, cfg.emaPeriod), p: 0 });
 
   const trades: Trade[] = [];
   const alerts: Partial<Record<OptionSide, Alert>> = {};
-  let pos: (ReturnType<typeof trigger> & { entryTime: number; day: string }) | undefined;
+  let pos: (NonNullable<ReturnType<typeof trigger>> & { entryTime: number; day: string; atBreakeven?: boolean }) | undefined;
   let day = "";
   const [ws, we, xt] = [hm(cfg.entryWindow.start), hm(cfg.entryWindow.end), hm(cfg.exitTime)];
 
@@ -81,8 +107,8 @@ export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
     trades.push({
       day: p.day, side: p.side, alertTime: p.alert.readyAt, entryTime: p.entryTime, entry: r2(p.entry), sl: r2(p.sl), target: r2(p.target),
       riskPts: r2(p.riskPts), exitTime: m.ts, exit: r2(exit), reason, pts: r2(pts),
-      rupees: r2(pts * cfg.optionDelta * cfg.quantity - cfg.chargesPerTrade),
-      riskRupees: r2(p.riskPts * cfg.optionDelta * cfg.quantity + cfg.chargesPerTrade),
+      rupees: r2(pts * unitCost - cfg.chargesPerTrade - slip),
+      riskRupees: r2(p.riskPts * unitCost + cfg.chargesPerTrade + slip),
     });
     pos = undefined;
   };
@@ -90,12 +116,21 @@ export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
   /** Stop/target check on one minute. `entryMinute` = only the stop counts. */
   const checkExit = (m: Candle, entryMinute: boolean) => {
     const p = pos!;
+    const stopReason = p.atBreakeven ? "BE" : "SL";
     if (p.side === "PE") {
-      if (m.h >= p.sl) return close(m, entryMinute ? p.sl : Math.max(m.o, p.sl), "SL");
+      if (m.h >= p.sl) return close(m, entryMinute ? p.sl : Math.max(m.o, p.sl), stopReason);
       if (!entryMinute && m.l <= p.target) return close(m, Math.min(m.o, p.target), "TARGET");
     } else {
-      if (m.l <= p.sl) return close(m, entryMinute ? p.sl : Math.min(m.o, p.sl), "SL");
+      if (m.l <= p.sl) return close(m, entryMinute ? p.sl : Math.min(m.o, p.sl), stopReason);
       if (!entryMinute && m.h >= p.target) return close(m, Math.max(m.o, p.target), "TARGET");
+    }
+    // Still open: breakeven applies from the NEXT minute (we can't know the order inside this one).
+    if (cfg.breakevenAtR && !p.atBreakeven) {
+      const fav = p.side === "PE" ? p.entry - m.l : m.h - p.entry;
+      if (fav >= cfg.breakevenAtR * p.riskPts) {
+        p.sl = p.entry;
+        p.atBreakeven = true;
+      }
     }
   };
 
@@ -106,6 +141,7 @@ export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
       // New day: an open trade from yesterday (data gap) is closed at its last price.
       if (pos) close(m1[i - 1], m1[i - 1].c, "TIME");
       day = d;
+      tradesToday = 0;
       delete alerts.CE;
       delete alerts.PE;
     }
@@ -115,6 +151,9 @@ export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
         const b = tf.bars[tf.p++];
         if (istDay(b.c.ts) === d && alertFor(tf.side, b.c, b.ema)) alerts[tf.side] = { side: tf.side, candle: b.c, ema: b.ema, readyAt: b.readyAt };
       }
+    }
+    if (trend) {
+      while (trend.p < trend.bars.length && trend.bars[trend.p].readyAt <= m.ts) trend.last = trend.bars[trend.p++];
     }
     const t = istMin(m.ts);
     if (pos) {
@@ -126,12 +165,20 @@ export function backtest(oneMin: Candle[], cfg: BtConfig): Trade[] {
       continue;
     }
     if (t < ws || t >= we) continue;
+    if (cfg.maxTradesPerDay !== undefined && tradesToday >= cfg.maxTradesPerDay) continue;
     for (const side of ["PE", "CE"] as OptionSide[]) {
       const a = alerts[side];
       if (!a) continue;
       const e = trigger(a, m, cfg.rewardRisk);
       if (!e) continue;
-      delete alerts[side];
+      delete alerts[side]; // a triggered alert is used up, taken or skipped
+      if (cfg.maxRiskRupees !== undefined && e.riskPts * unitCost + cfg.chargesPerTrade + slip > cfg.maxRiskRupees) continue;
+      if (trend) {
+        const tb = trend.last;
+        if (!tb || !Number.isFinite(tb.ema)) continue;
+        if (side === "PE" ? !(tb.c.c < tb.ema) : !(tb.c.c > tb.ema)) continue;
+      }
+      tradesToday++;
       pos = { ...e, entryTime: m.ts, day: d };
       checkExit(m, true);
       break;

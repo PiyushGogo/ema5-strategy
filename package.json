@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "backtest": "node dist/src/backtest.js",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "optimize": "node dist/src/optimize.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

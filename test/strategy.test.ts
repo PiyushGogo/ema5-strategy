@@ -99,6 +99,38 @@ describe("backtest", () => {
     expect(trades[0]).toMatchObject({ side: "CE", entry: 95, sl: 93, target: 101, reason: "TARGET", exit: 101, pts: 6 });
   });
 
+  it("slippage is charged per unit", () => {
+    const trades = backtest([...setupPE(), c("09:50", 106, 106, 104, 104), c("09:51", 104, 104, 100, 100), c("09:52", 100, 100, 98, 98)], { ...cfg, slippagePerUnit: 1 });
+    expect(trades[0].rupees).toBe(-10); // 10 − 20 (₹1 × 20 units)
+  });
+
+  it("maxRiskRupees skips signals with a big stop", () => {
+    const m = [...setupPE(), c("09:50", 106, 106, 104, 104), c("09:51", 104, 104, 100, 100), c("09:52", 100, 100, 98, 98)];
+    expect(backtest(m, { ...cfg, maxRiskRupees: 69 })).toHaveLength(0); // risk is ₹70
+    expect(backtest(m, { ...cfg, maxRiskRupees: 70 })).toHaveLength(1);
+  });
+
+  it("breakeven at 1R: after +1R the stop moves to entry (from the next minute)", () => {
+    // entry 105, risk 2 → +1R at 103; then price comes back up through 105
+    const m = [...setupPE(), c("09:50", 106, 106, 104, 104), c("09:51", 104, 104, 102.5, 103), c("09:52", 103, 106, 103, 106)];
+    expect(backtest(m, { ...cfg, breakevenAtR: 1 })[0]).toMatchObject({ reason: "BE", exit: 105, pts: 0 });
+    expect(backtest(m, cfg)).toHaveLength(1); // without it: still open, closed at the end at 106
+  });
+
+  it("trend filter: PE only when the trend chart is below its EMA", () => {
+    const m = [...setupPE(), c("09:50", 106, 106, 104, 104), c("09:51", 104, 104, 100, 100), c("09:52", 100, 100, 98, 98)];
+    // 5-min trend EMA(3): after the 09:45 bar closes at 106 the trend close is ABOVE its EMA → PE blocked
+    expect(backtest(m, { ...cfg, trendFilter: { minutes: 5, period: 3 } })).toHaveLength(0);
+  });
+
+  it("maxTradesPerDay caps entries", () => {
+    const one = [...setupPE(), c("09:50", 106, 106, 104, 104), c("09:51", 108, 109, 108, 109)]; // stopped out
+    const again = Array.from({ length: 5 }, (_, i) => c(`09:${55 + i}`, 110, 112, 110, 111)); // new alert 09:55–10:00
+    const m = [...one, ...flat("09:52", "09:55", 109), ...again, c("10:00", 110, 110, 108, 108)];
+    expect(backtest(m, cfg).length).toBe(2);
+    expect(backtest(m, { ...cfg, maxTradesPerDay: 1 }).length).toBe(1);
+  });
+
   it("summary maths", () => {
     const s = summarize([
       { rupees: 300, riskRupees: 100, reason: "TARGET" },
