@@ -99,5 +99,48 @@ How it avoids fooling you:
 
 Slippage of ₹1 per option unit (round trip) is now included everywhere (`slippagePerUnit` in `config.json`).
 
+## Liquidity levels bot: `npm run levels`
+
+Read-only: uses your analytics token and **never places orders**. Marks where stop-losses cluster on the Sensex and Nifty index:
+
+| Level | Meaning |
+|---|---|
+| PDH / PDL | Previous day high / low |
+| PWH / PWL | Previous week high / low |
+| ORH / ORL | Today's opening range (09:15–09:30) |
+| EQH / EQL ×n | n swing highs/lows at (almost) the same price: the strongest pools |
+| SH / SL | Unswept 15-min swing high / low (last 5 days) |
+| ★ | Strong level (several stops likely resting there) |
+
+Only **unswept** levels are listed: once price trades through a level, its stops are gone.
+
+**What you get on Telegram:**
+- **09:10:** today's nearest 5 levels above and below for each index.
+- **09:31:** the opening range.
+- **During the day (polled every minute):**
+  - ⚡ **Swept:** price traded through a level.
+  - ↩️ **Reclaimed:** after a sweep, a 5-min candle closed back inside (the classic liquidity grab).
+- Weekends and NSE/BSE holidays are skipped.
+
+Put `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in this project's `.env`. It can be the same bot as Risk Guard: this one only sends, so they don't clash.
+
+To print and send today's levels once:
+
+```bash
+npm run levels -- --token-file data/analytics-token.txt --once
+```
+
+To run all day:
+
+```bash
+npm run levels -- --token-file data/analytics-token.txt
+```
+
+Tune it in `config.json` → `levels`:
+- `equalTolerance`: 0.0003 = 0.03%, about 24 Sensex or 7 Nifty points. Lower it if you get too many EQH/EQL.
+- `swingDays`, `swingTimeframeMin` and `pivotK` control how swings are found.
+
+**Alerts are information, not trade signals.** Liquidity-sweep setups are unbacktested here. Test them like the 5 EMA before trading them.
+
 ## Next (after a good backtest)
 Live Telegram alerts when a signal triggers. You still place the trade yourself.

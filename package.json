@@ -12,7 +12,8 @@
     "backtest": "node dist/src/backtest.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "optimize": "node dist/src/optimize.js"
+    "optimize": "node dist/src/optimize.js",
+    "levels": "node dist/src/levelsBot.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

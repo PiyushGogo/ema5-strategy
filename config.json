@@ -15,5 +15,11 @@
   "lotSize": {
     "SENSEX": 20,
     "NIFTY": 65
+  },
+  "levels": {
+    "swingDays": 5,
+    "swingTimeframeMin": 15,
+    "pivotK": 2,
+    "equalTolerance": 0.0003
   }
 }
